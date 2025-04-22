@@ -1,3 +1,5 @@
+#define USE_SERVOS
+
 #include <Arduino.h>
 #include "commands.h"
 #include "motor_driver.h"
