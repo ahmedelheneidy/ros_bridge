@@ -1,21 +1,38 @@
+// motor_driver.h
 #ifndef MOTOR_DRIVER_H
 #define MOTOR_DRIVER_H
 
-// Front‑Left motor pins
-#define FL_IN1   13
-#define FL_IN2   12
-// Front‑Right motor pins
-#define FR_IN1   11
-#define FR_IN2   10
-// Rear‑Left motor pins
-#define RL_IN1    9
-#define RL_IN2    8
-// Rear‑Right motor pins
-#define RR_IN1    7
-#define RR_IN2    6
+#include <Arduino.h>
 
-void initMotorController();
-void setMotorSpeed(int wheelIndex, int spd);
-void setMecanum(int vx, int vy, int omega);
+// Motor indices
+#define FL 0
+#define FR 1
+#define RL 2
+#define RR 3
 
+// L298 pin assignments (PWM on all forward/backward lines)
+#ifdef L298_MOTOR_DRIVER
+  // Front‐Left
+  #define FL_FORWARD_PIN   3
+  #define FL_BACKWARD_PIN  4
+  // Front‐Right
+  #define FR_FORWARD_PIN   5
+  #define FR_BACKWARD_PIN  6
+  // Rear‐Left
+  #define RL_FORWARD_PIN   9
+  #define RL_BACKWARD_PIN 10
+  // Rear‐Right
+  #define RR_FORWARD_PIN  11
+  #define RR_BACKWARD_PIN 12
 #endif
+
+// Initialize all motor‐driver pins
+void initMotorController();
+
+// Set one wheel’s speed: idx = FL|FR|RL|RR, spd = –255…+255
+void setMotorSpeed(uint8_t idx, int spd);
+
+// Set all four wheel speeds at once
+void setMotorSpeeds(int flSpeed, int frSpeed, int rlSpeed, int rrSpeed);
+
+#endif // MOTOR_DRIVER_H

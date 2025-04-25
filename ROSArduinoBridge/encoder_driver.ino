@@ -1,50 +1,74 @@
+// encoders.ino
 #include "encoder_driver.h"
-#include <Arduino.h>
 
-volatile long encCounts[4] = {0,0,0,0};
+#ifdef ARDUINO_ENC_COUNTER
 
-void handleFLA() { encCounts[FL] += (digitalRead(FL_ENC_PIN_B) ? +1 : -1); }
-void handleFLB() { encCounts[FL] += (digitalRead(FL_ENC_PIN_A) ? -1 : +1); }
-void handleFRA() { encCounts[FR] += (digitalRead(FR_ENC_PIN_B) ? +1 : -1); }
-void handleFRB() { encCounts[FR] += (digitalRead(FR_ENC_PIN_A) ? -1 : +1); }
-void handleRLA() { encCounts[RL] += (digitalRead(RL_ENC_PIN_B) ? +1 : -1); }
-void handleRLB() { encCounts[RL] += (digitalRead(RL_ENC_PIN_A) ? -1 : +1); }
-void handleRRA() { encCounts[RR] += (digitalRead(RR_ENC_PIN_B) ? +1 : -1); }
-void handleRRB() { encCounts[RR] += (digitalRead(RR_ENC_PIN_A) ? -1 : +1); }
+// four volatile counters
+volatile long encCount[4] = {0, 0, 0, 0};
 
-void setupEncoders() {
-  pinMode(FL_ENC_PIN_A, INPUT_PULLUP);
-  pinMode(FL_ENC_PIN_B, INPUT_PULLUP);
-  pinMode(FR_ENC_PIN_A, INPUT_PULLUP);
-  pinMode(FR_ENC_PIN_B, INPUT_PULLUP);
-  pinMode(RL_ENC_PIN_A, INPUT_PULLUP);
-  pinMode(RL_ENC_PIN_B, INPUT_PULLUP);
-  pinMode(RR_ENC_PIN_A, INPUT_PULLUP);
-  pinMode(RR_ENC_PIN_B, INPUT_PULLUP);
+// ——— forward‐declare ISRs ———
+void ISR_FL();
+void ISR_FR();
+void ISR_RL();
+void ISR_RR();
 
-  attachInterrupt(digitalPinToInterrupt(FL_ENC_PIN_A), handleFLA, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(FL_ENC_PIN_B), handleFLB, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(FR_ENC_PIN_A), handleFRA, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(FR_ENC_PIN_B), handleFRB, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(RL_ENC_PIN_A), handleRLA, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(RL_ENC_PIN_B), handleRLB, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(RR_ENC_PIN_A), handleRRA, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(RR_ENC_PIN_B), handleRRB, CHANGE);
+// must be called from your sketch’s setup():
+void initEncoders() {
+  // configure A & B pins
+  pinMode(FL_ENC_A_PIN, INPUT_PULLUP);
+  pinMode(FL_ENC_B_PIN, INPUT_PULLUP);
+  pinMode(FR_ENC_A_PIN, INPUT_PULLUP);
+  pinMode(FR_ENC_B_PIN, INPUT_PULLUP);
+  pinMode(RL_ENC_A_PIN, INPUT_PULLUP);
+  pinMode(RL_ENC_B_PIN, INPUT_PULLUP);
+  pinMode(RR_ENC_A_PIN, INPUT_PULLUP);
+  pinMode(RR_ENC_B_PIN, INPUT_PULLUP);
+
+  // attach each A-pin to its ISR on any CHANGE
+  attachInterrupt(digitalPinToInterrupt(FL_ENC_A_PIN), ISR_FL, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(FR_ENC_A_PIN), ISR_FR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(RL_ENC_A_PIN), ISR_RL, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(RR_ENC_A_PIN), ISR_RR, CHANGE);
 }
 
+// simple “one-channel” quadrature decode in each ISR:
+void ISR_FL() {
+  bool A = digitalRead(FL_ENC_A_PIN);
+  bool B = digitalRead(FL_ENC_B_PIN);
+  encCount[FL] += (A == B) ? +1 : -1;
+}
+void ISR_FR() {
+  bool A = digitalRead(FR_ENC_A_PIN);
+  bool B = digitalRead(FR_ENC_B_PIN);
+  encCount[FR] += (A == B) ? +1 : -1;
+}
+void ISR_RL() {
+  bool A = digitalRead(RL_ENC_A_PIN);
+  bool B = digitalRead(RL_ENC_B_PIN);
+  encCount[RL] += (A == B) ? +1 : -1;
+}
+void ISR_RR() {
+  bool A = digitalRead(RR_ENC_A_PIN);
+  bool B = digitalRead(RR_ENC_B_PIN);
+  encCount[RR] += (A == B) ? +1 : -1;
+}
+
+// read one wheel’s count
 long readEncoder(int i) {
-  noInterrupts();
-  long v = encCounts[i];
-  interrupts();
-  return v;
+  if (i >= 0 && i < 4) return encCount[i];
+  return 0;
 }
 
+// zero one wheel
 void resetEncoder(int i) {
-  noInterrupts();
-  encCounts[i] = 0;
-  interrupts();
+  if (i >= 0 && i < 4) encCount[i] = 0;
 }
 
+// zero all wheels
 void resetEncoders() {
-  for (int i = 0; i < 4; i++) resetEncoder(i);
+  for (int i = 0; i < 4; i++) encCount[i] = 0;
 }
+
+#else
+  #error "You must define ARDUINO_ENC_COUNTER for this driver!"
+#endif

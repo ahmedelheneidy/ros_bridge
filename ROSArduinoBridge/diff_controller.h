@@ -1,112 +1,112 @@
-#ifndef DIFF_CONTROLLER_H
-#define DIFF_CONTROLLER_H
+// mecanum_drive.h
+#ifndef MECANUM_DRIVE_H
+#define MECANUM_DRIVE_H
 
 #include "encoder_driver.h"
 #include "motor_driver.h"
-#include "commands.h"
 
-// Maximum PWM value for motor outputs
-#define MAX_PWM 255
+// number of wheels
+#define NUM_WHEELS 4
 
-/* PID setpoint structure for each wheel */
+// wheel indices — must match motor_driver.h
+#define FL 0
+#define FR 1
+#define RL 2
+#define RR 3
+
+// PID setpoint/state for one wheel
 typedef struct {
-  double TargetTicksPerFrame;    // Desired encoder ticks per update interval
-  long   Encoder;                // Current encoder count
-  long   PrevEnc;                // Encoder count at last update
-  int    PrevInput;              // Last measured tick delta
-  int    ITerm;                  // Integrated term for I component
-  long   output;                 // Last output PWM value
+  double TargetTicksPerFrame;  // desired encoder‐ticks/frame
+  long   Encoder;              // most recent encoder reading
+  long   PrevEnc;              // prior encoder reading
+  int    PrevInput;            // last delta‐ticks
+  int    ITerm;                // integral term
+  long   output;               // last output PWM
 } SetPointInfo;
 
-// PID parameters (tune these as needed)
+// one PID struct per wheel
+static SetPointInfo wheelPID[NUM_WHEELS];
+
+// PID gains (tune as needed)
 static int Kp = 20;
-static int Ki = 0;
 static int Kd = 12;
-static int Ko = 50;
+static int Ki = 0;
+static int Ko = 50;  // scale factor
 
-// Array of PID controllers, one per wheel (FL, FR, RL, RR)
-static SetPointInfo wheelPID[4];
-
-// Flag indicating whether the robot should be regulating speed
+// flag: are we currently driving?
 static bool moving = false;
 
 /**
- * Initialize all PID controllers to the current encoder values.
+ * Zero and initialize all four PIDs.
  */
-void resetPID() {
-  for (int i = 0; i < 4; i++) {
+void resetPID(){
+  for(int i = 0; i < NUM_WHEELS; i++){
     wheelPID[i].TargetTicksPerFrame = 0.0;
-    wheelPID[i].Encoder             = readEncoder(i);
-    wheelPID[i].PrevEnc             = wheelPID[i].Encoder;
-    wheelPID[i].output              = 0;
-    wheelPID[i].PrevInput           = 0;
-    wheelPID[i].ITerm               = 0;
+    wheelPID[i].Encoder  = readEncoder(i);
+    wheelPID[i].PrevEnc  = wheelPID[i].Encoder;
+    wheelPID[i].output   = 0;
+    wheelPID[i].PrevInput= 0;
+    wheelPID[i].ITerm    = 0;
   }
 }
 
 /**
- * Compute PID output for a single wheel.
+ * Run the PID update on one wheel.
  */
 void doPID(SetPointInfo *p) {
-  long Perror;
-  int  input;
-  long newOutput;
+  // how many ticks since last frame
+  int input = p->Encoder - p->PrevEnc;
+  long err  = (long)p->TargetTicksPerFrame - input;
 
-  // Calculate measurement and error
-  input  = p->Encoder - p->PrevEnc;
-  Perror = p->TargetTicksPerFrame - input;
-
-  // PID formula: P + D + I, avoiding derivative kick
-  newOutput  = (Kp * Perror - Kd * (input - p->PrevInput) + p->ITerm) / Ko;
+  // PID calculation (avoiding derivative kick)
+  long out = (Kp * err - Kd * (input - p->PrevInput) + p->ITerm) / Ko;
   p->PrevEnc = p->Encoder;
+  out += p->output;
 
-  // Accumulate on top of the previous output
-  newOutput += p->output;
+  // saturate & accumulate integral if not saturated
+  if (out >  MAX_PWM)       out =  MAX_PWM;
+  else if (out < -MAX_PWM)  out = -MAX_PWM;
+  else                       p->ITerm += Ki * err;
 
-  // Constrain to PWM limits and update integral term if not saturated
-  if (newOutput >= MAX_PWM) {
-    newOutput = MAX_PWM;
-  } else if (newOutput <= -MAX_PWM) {
-    newOutput = -MAX_PWM;
-  } else {
-    p->ITerm += Ki * Perror;
-  }
-
-  p->output    = newOutput;
+  p->output    = out;
   p->PrevInput = input;
 }
 
 /**
- * Update all PID controllers and drive motors.
- * Call this regularly (e.g. in loop()).
+ * Read all encoders, run PID on each, then set motor speeds.
+ * Call this at your control‐loop rate.
  */
 void updatePID() {
-  // Read all encoders
-  for (int i = 0; i < 4; i++) {
+  // 1) sample all encoders
+  for(int i = 0; i < NUM_WHEELS; i++){
     wheelPID[i].Encoder = readEncoder(i);
   }
 
-  // If not moving, reset if needed and skip
+  // 2) if we're stopped, reset once
   if (!moving) {
-    for (int i = 0; i < 4; i++) {
+    bool needReset = false;
+    for(int i = 0; i < NUM_WHEELS; i++){
       if (wheelPID[i].PrevInput != 0) {
-        resetPID();
+        needReset = true;
         break;
       }
     }
+    if (needReset) resetPID();
     return;
   }
 
-  // Compute and apply PID for each wheel
-  for (int i = 0; i < 4; i++) {
+  // 3) run PID for each wheel
+  for(int i = 0; i < NUM_WHEELS; i++){
     doPID(&wheelPID[i]);
-    setMotorSpeed(i, wheelPID[i].output);
   }
+
+  // 4) send PWM commands to all four motors
+  setMotorSpeeds(
+    wheelPID[FL].output,
+    wheelPID[FR].output,
+    wheelPID[RL].output,
+    wheelPID[RR].output
+  );
 }
 
-/**
- * Set target speeds (ticks/frame) for each wheel and enable PID.
- * Call before updatePID(). Example: wheelPID[FL].TargetTicksPerFrame = desiredFL;
- */
-
-#endif // DIFF_CONTROLLER_H
+#endif // MECANUM_DRIVE_H

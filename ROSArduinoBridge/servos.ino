@@ -1,13 +1,14 @@
+// servos.cpp
 #include "servos.h"
 
-int stepDelay[N_SERVOS]         = {0, 0};
-byte servoPins[N_SERVOS]        = {3, 4};
-byte servoInitPosition[N_SERVOS]= {90,90};
-SweepServo servos[N_SERVOS];
+SweepServo servo;  // instantiate
 
 SweepServo::SweepServo()
-  : stepDelayMs(0), currentPositionDegrees(0),
-    targetPositionDegrees(0), lastSweepTime(0) {}
+  : stepDelayMs(0),
+    currentPositionDegrees(0),
+    targetPositionDegrees(0),
+    lastSweepTime(0)
+{}
 
 void SweepServo::initServo(int pin, int delayMs, int initPos) {
   servo.attach(pin);

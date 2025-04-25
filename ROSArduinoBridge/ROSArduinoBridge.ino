@@ -1,121 +1,192 @@
-#define USE_SERVOS
+// ROSArduinoBridge.ino
+
+#define USE_BASE            // Enable base controller
+#define ARDUINO_ENC_COUNTER // Four encoders via interrupts
+#define L298_MOTOR_DRIVER   // Four PWM-only L298 channels
+#undef  USE_SERVOS          // No servos in this sketch
+
+#define BAUDRATE     57600
+#define MAX_PWM      255
 
 #include <Arduino.h>
 #include "commands.h"
-#include "motor_driver.h"
-#include "encoder_driver.h"
 #include "sensors.h"
-#include "servos.h"
-#include "diff_controller.h"    // <-- closed‑loop PID
+
+#ifdef USE_BASE
+  #include "motor_driver.h"     // our 4-motor pwm driver
+  #include "encoder_driver.h"         // our 4-encoder interrupt driver
+  #include "diff_controller.h"    // our 4-wheel PID controller
+
+  // PID timing
+  #define PID_RATE            30     // Hz
+  const int PID_INTERVAL = 1000 / PID_RATE;
+  unsigned long nextPID     = PID_INTERVAL;
+
+  // auto-stop if no commands arrive
+  #define AUTO_STOP_INTERVAL 2000    // ms
+  long lastMotorCommand     = AUTO_STOP_INTERVAL;
+#endif
+
+// ———————————————————————————
+// Serial-command parsing state
+// ———————————————————————————
+char  cmd = 0;
+char  argBuf[64];
+int   argIdx = 0;
+
+void resetCommand() {
+  cmd    = 0;
+  argIdx = 0;
+  memset(argBuf, 0, sizeof(argBuf));
+}
+
+/**
+ * runCommand()
+ *   Parses up to four space-delimited integers in argBuf,
+ *   then dispatches to the appropriate handler.
+ */
+int runCommand() {
+  // split argBuf into tokens
+  char* tokens[4] = { nullptr, nullptr, nullptr, nullptr };
+  int   nTok = 0;
+  char* saveptr;
+  char* t = strtok_r(argBuf, " ", &saveptr);
+  while (t && nTok < 4) {
+    tokens[nTok++] = t;
+    t = strtok_r(nullptr, " ", &saveptr);
+  }
+
+  switch (cmd) {
+    // — Encoder commands —
+    case READ_ENCODERS:
+      for (int i = 0; i < 4; ++i) {
+        Serial.print(readEncoder(i));
+        if (i < 3) Serial.print(' ');
+      }
+      Serial.println();
+      break;
+
+    case RESET_ENCODERS:
+      resetEncoders();
+      resetPID();
+      Serial.println("OK");
+      break;
+
+    // — Mecanum velocity via PID —
+    case MOTOR_SPEEDS:
+      lastMotorCommand = millis();
+      {
+        int speeds[4] = {0,0,0,0};
+        for (int i = 0; i < nTok; ++i) speeds[i] = atoi(tokens[i]);
+
+        bool allZero = true;
+        for (int i = 0; i < 4; ++i) if (speeds[i] != 0) allZero = false;
+
+        if (allZero) {
+          setMotorSpeeds(0,0,0,0);
+          resetPID();
+          moving = false;
+        } else {
+          moving = true;
+        }
+        for (int i = 0; i < 4; ++i) {
+          wheelPID[i].TargetTicksPerFrame = speeds[i];
+        }
+        Serial.println("OK");
+      }
+      break;
+
+    // — Raw PWM control —
+    case MOTOR_RAW_PWM:
+      lastMotorCommand = millis();
+      {
+        int pwm[4] = {0,0,0,0};
+        for (int i = 0; i < nTok; ++i) pwm[i] = atoi(tokens[i]);
+
+        resetPID();
+        moving = false;
+        setMotorSpeeds(pwm[0], pwm[1], pwm[2], pwm[3]);
+        Serial.println("OK");
+      }
+      break;
+
+    // — Pass through the rest unchanged —
+    case GET_BAUDRATE:
+      Serial.println(BAUDRATE);
+      break;
+    case ANALOG_READ:
+      Serial.println(analogRead(atoi(tokens[0])));
+      break;
+    case DIGITAL_READ:
+      Serial.println(digitalRead(atoi(tokens[0])));
+      break;
+    case ANALOG_WRITE:
+      analogWrite(atoi(tokens[0]), atoi(tokens[1]));
+      Serial.println("OK");
+      break;
+    case DIGITAL_WRITE:
+      digitalWrite(atoi(tokens[0]),
+                   atoi(tokens[1]) ? HIGH : LOW);
+      Serial.println("OK");
+      break;
+    case PIN_MODE:
+      pinMode(atoi(tokens[0]),
+              atoi(tokens[1]) ? OUTPUT : INPUT);
+      Serial.println("OK");
+      break;
+    case PING:
+      Serial.println(Ping());
+      break;
+
+    default:
+      Serial.println("Invalid Command");
+      break;
+  }
+  return 0;
+}
 
 void setup() {
-  Serial.begin(115200);
-  initMotorController();
-  setupEncoders();
-  resetEncoders();
-  resetPID();                // initialize all PID state
-  #ifdef USE_SERVOS
-    for (int i = 0; i < N_SERVOS; i++)
-      servos[i].initServo(servoPins[i], stepDelay[i], servoInitPosition[i]);
-  #endif
-  pinMode(UV_RELAY, OUTPUT);
+  Serial.begin(BAUDRATE);
+
+#ifdef USE_BASE
+  initEncoders();          // set up all 4 encoder interrupts
+  initMotorController();   // configure all 8 PWM pins
+  resetPID();              // zero all 4 PID controllers
+#endif
 }
 
 void loop() {
-  if (Serial.available()) {
-    char cmd = Serial.read();
-    switch (cmd) {
-      case DRIVE_MECANUM: {
-        // read desired velocities (ticks/frame or any unit you choose)
-        int vx = Serial.parseInt();    // forward/back
-        int vy = Serial.parseInt();    // strafe right
-        int om = Serial.parseInt();    // rotate CW
-
-        // mecanum mixing into per‑wheel targets
-        wheelPID[FL].TargetTicksPerFrame =  vx + vy + om;
-        wheelPID[FR].TargetTicksPerFrame =  vx - vy - om;
-        wheelPID[RL].TargetTicksPerFrame =  vx - vy + om;
-        wheelPID[RR].TargetTicksPerFrame =  vx + vy - om;
-
-        moving = true;                // enable PID loop
-        Serial.println("OK");
-        break;
+  // — Serial input parsing —
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\r') {
+      runCommand();
+      resetCommand();
+    }
+    else if (c == ' ') {
+      if (argIdx < sizeof(argBuf)-1) {
+        argBuf[argIdx++] = '\0';  // mark end of one token
       }
-
-      case READ_ENCODERS: {
-        long e0 = readEncoder(FL),
-             e1 = readEncoder(FR),
-             e2 = readEncoder(RL),
-             e3 = readEncoder(RR);
-        Serial.print(e0); Serial.print(',');
-        Serial.print(e1); Serial.print(',');
-        Serial.print(e2); Serial.print(',');
-        Serial.println(e3);
-        break;
+    }
+    else {
+      if (!cmd) {
+        cmd = c;                   // first non-space is the command
+      } else if (argIdx < sizeof(argBuf)-1) {
+        argBuf[argIdx++] = c;      // collect args
       }
-
-      case RESET_ENCODERS:
-        resetEncoders();
-        resetPID();                  // also reset PID integrators
-        Serial.println("OK");
-        break;
-
-      case PING: {
-        int pin = Serial.parseInt();
-        Serial.println(Ping(pin));
-        break;
-      }
-
-      case SERVO_WRITE: {
-        int idx = Serial.parseInt();
-        int pos = Serial.parseInt();
-        servos[idx].setTargetPosition(pos);
-        Serial.println("OK");
-        break;
-      }
-
-      case DIGITAL_WRITE: {
-        int pin = Serial.parseInt();
-        int val = Serial.parseInt();
-        digitalWrite(pin, val);
-        Serial.println("OK");
-        break;
-      }
-
-      case ANALOG_READ: {
-        int pin = Serial.parseInt();
-        Serial.println(analogRead(pin));
-        break;
-      }
-
-      case ANALOG_WRITE: {
-        int pin = Serial.parseInt();
-        int val = Serial.parseInt();
-        analogWrite(pin, val);
-        Serial.println("OK");
-        break;
-      }
-
-      case 'v':  // UV on
-        digitalWrite(UV_RELAY, HIGH);
-        break;
-
-      case 'V':  // UV off
-        digitalWrite(UV_RELAY, LOW);
-        break;
-
-      default:
-        // unknown command—ignore
-        break;
     }
   }
 
-  // ----- CLOSED-LOOP UPDATE -----
-  updatePID();                 // runs every loop, sets motor PWMs
-
-  // Sweep servos in background
-  #ifdef USE_SERVOS
-    for (int i = 0; i < N_SERVOS; i++)
-      servos[i].doSweep();
-  #endif
+#ifdef USE_BASE
+  // — PID loop timing —
+  if (millis() > nextPID) {
+    updatePID();
+    nextPID += PID_INTERVAL;
+  }
+  // — auto-stop check —
+  if (millis() - lastMotorCommand > AUTO_STOP_INTERVAL) {
+    setMotorSpeeds(0,0,0,0);
+    moving = false;
+  }
+#endif
 }
