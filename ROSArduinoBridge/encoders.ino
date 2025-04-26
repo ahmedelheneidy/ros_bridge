@@ -1,5 +1,5 @@
 // encoders.ino
-#include "encoder_driver.h"
+#include "encoders.h"
 
 #ifdef ARDUINO_ENC_COUNTER
 

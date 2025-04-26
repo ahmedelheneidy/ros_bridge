@@ -2,7 +2,7 @@
 #ifndef MECANUM_DRIVE_H
 #define MECANUM_DRIVE_H
 
-#include "encoder_driver.h"
+#include "encoders.h"
 #include "motor_driver.h"
 
 // number of wheels

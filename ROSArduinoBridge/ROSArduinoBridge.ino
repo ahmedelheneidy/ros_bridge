@@ -14,8 +14,8 @@
 
 #ifdef USE_BASE
   #include "motor_driver.h"     // our 4-motor pwm driver
-  #include "encoder_driver.h"         // our 4-encoder interrupt driver
-  #include "diff_controller.h"    // our 4-wheel PID controller
+  #include "encoders.h"         // our 4-encoder interrupt driver
+  #include "mecanum_drive.h"    // our 4-wheel PID controller
 
   // PID timing
   #define PID_RATE            30     // Hz
